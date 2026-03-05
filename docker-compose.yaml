@@ -19,20 +19,20 @@ services:
       retries: 5
       start_period: 10s
 
-  # app:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - DATABASE_URL=postgresql://${SOURCE_DB_USER}:${SOURCE_DB_PASSWORD}@transactions-db:5432/${SOURCE_DB}
-  #     - SOURCE_DB_HOST=transactions-db
-  #     - DEST_DB_HOST=transactions-db
-  #   volumes:
-  #     - ./logs:/app/logs
-  #     - ./output:/app/output
-  #   entrypoint: ["/entrypoint.sh"]
-  #   stdin_open: true
-  #   tty: true
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://${SOURCE_DB_USER}:${SOURCE_DB_PASSWORD}@transactions-db:5432/${SOURCE_DB}
+      - SOURCE_DB_HOST=transactions-db
+      - DEST_DB_HOST=transactions-db
+    volumes:
+      - ./logs:/app/logs
+      - ./output:/app/output
+    entrypoint: ["/entrypoint.sh"]
+    stdin_open: true
+    tty: true
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest

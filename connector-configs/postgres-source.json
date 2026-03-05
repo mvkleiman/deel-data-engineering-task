@@ -1,0 +1,29 @@
+{
+    "name": "postgres-source",
+    "config": {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "database.hostname": "transactions-db",
+        "database.port": "5432",
+        "database.user": "finance_db_user",
+        "database.password": "1234",
+        "database.dbname": "finance_db",
+        "topic.prefix": "deel",
+        "schema.include.list": "operations",
+        "table.include.list": "operations.customers,operations.products,operations.orders,operations.order_items",
+        "plugin.name": "pgoutput",
+        "publication.name": "cdc_publication",
+        "slot.name": "cdc_pgoutput",
+        "snapshot.mode": "initial",
+        "decimal.handling.mode": "double",
+        "tombstones.on.delete": "false",
+        "transforms": "unwrap,renameFields,castTypes",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.add.fields": "op,source.ts_ms",
+        "transforms.unwrap.add.fields.prefix": "cdc_",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.renameFields.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+        "transforms.renameFields.renames": "__deleted:cdc_deleted,quanity:quantity",
+        "transforms.castTypes.type": "org.apache.kafka.connect.transforms.Cast$Value",
+        "transforms.castTypes.spec": "cdc_deleted:boolean"
+    }
+}
