@@ -165,6 +165,25 @@ services:
       redpanda:
         condition: service_healthy
 
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:25.12.5.44
+    container_name: clickhouse-init
+    volumes:
+      - ./clickhouse/sql:/sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for f in /sql/*.sql; do
+          echo "Running $$(basename $$f) ..."
+          clickhouse-client --host clickhouse --multiquery < $$f
+          echo " OK"
+        done
+        echo "ClickHouse initialization complete."
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres_data:
   redpanda_data:
