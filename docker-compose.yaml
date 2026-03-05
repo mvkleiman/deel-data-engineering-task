@@ -2,13 +2,14 @@ services:
   transactions-db:
     build:
       context: ./docker/postgres-db
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${SOURCE_DB_USER}
       - POSTGRES_PASSWORD=${SOURCE_DB_PASSWORD}
       - POSTGRES_DB=${SOURCE_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - "${PWD}/db-scripts/initialize_db_ddl.sql:/docker-entrypoint-initdb.d/initialize_db_ddl.sql:ro"
+      - ./db-scripts/initialize_db_ddl.sql:/docker-entrypoint-initdb.d/initialize_db_ddl.sql:ro
     ports:
       - "5432:5432"
     command: ["postgres", "-c", "wal_level=logical", "-c", "hot_standby=on"]
@@ -37,6 +38,7 @@ services:
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     container_name: redpanda
+    restart: unless-stopped
     command:
       - redpanda start
       - --node-id 0
@@ -72,6 +74,7 @@ services:
   connect:
     image: debezium/connect:3.0.0.Final
     container_name: connect
+    restart: unless-stopped
     ports:
       - "8083:8083"
     environment:
@@ -128,6 +131,7 @@ services:
     image: clickhouse/clickhouse-keeper:25.12.5.44-alpine
     container_name: clickhouse-keeper
     hostname: clickhouse-keeper
+    restart: unless-stopped
     volumes:
       - clickhouse_keeper_data:/var/lib/clickhouse
       - ./clickhouse/keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml
@@ -144,6 +148,7 @@ services:
     image: clickhouse/clickhouse-server:25.12.5.44
     container_name: clickhouse
     hostname: clickhouse
+    restart: unless-stopped
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
@@ -211,6 +216,7 @@ services:
     build:
       context: ./api
     container_name: api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:

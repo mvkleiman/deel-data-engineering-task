@@ -6,6 +6,7 @@
         <size>100M</size>
         <count>3</count>
     </logger>
+    <timezone>UTC</timezone>
     <display_name>deel-clickhouse</display_name>
     <listen_host>0.0.0.0</listen_host>
     <http_port>8123</http_port>
