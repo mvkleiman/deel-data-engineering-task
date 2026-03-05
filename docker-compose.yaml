@@ -165,6 +165,29 @@ services:
       redpanda:
         condition: service_healthy
 
+  connect-init:
+    image: curlimages/curl:latest
+    container_name: connect-init
+    volumes:
+      - ./connector-configs/postgres-source.json:/config/postgres-source.json:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Kafka Connect to be ready..."
+        until curl -sf http://connect:8083/connectors; do
+          sleep 2
+        done
+        echo "Kafka Connect is ready. Registering connectors..."
+        curl -s -X POST http://connect:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d @/config/postgres-source.json
+        echo ""
+        echo "Connector registered."
+    depends_on:
+      connect:
+        condition: service_healthy
+    restart: "no"
+
   clickhouse-init:
     image: clickhouse/clickhouse-server:25.12.5.44
     container_name: clickhouse-init
