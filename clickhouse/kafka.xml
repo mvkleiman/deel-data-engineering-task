@@ -1,0 +1,7 @@
+<clickhouse>
+    <kafka>
+        <auto_offset_reset>smallest</auto_offset_reset>
+        <session_timeout_ms>60000</session_timeout_ms>
+        <max_partition_fetch_bytes>10485760</max_partition_fetch_bytes>
+    </kafka>
+</clickhouse>
