@@ -184,6 +184,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  api:
+    build:
+      context: ./api
+    container_name: api
+    ports:
+      - "8000:8000"
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redpanda_data:
