@@ -1,395 +1,302 @@
 # ACME Delivery Services Analytics Platform
 
-This project implements a data engineering solution for ACME Delivery Services to monitor created orders and their details with low latency between the orders system and the analytical platform.
+A CDC-based streaming analytics platform for monitoring ACME delivery orders with low latency. Data flows from the operational PostgreSQL database through Debezium and Redpanda into ClickHouse, where it is served via a FastAPI REST API.
 
-## Overview
+### How This Solves the Task Requirements
 
-The solution extracts data from a source PostgreSQL database, transforms it into an analytical model, and loads it into a target PostgreSQL database. 
-A command-line interface (CLI) allows users to run queries and export results to CSV files.
-
-### Key Features
-
-- Modular design with clear separation of concerns
-- Near real-time data synchronization
-- Efficient data extraction and transformation
-- Command-line interface for business queries
-- Docker-based deployment for easy setup
-- Comprehensive error handling and logging
+| Requirement | Solution |
+|---|---|
+| Historical + current state data | ClickHouse `*_hist` tables (append-only audit trail) + `ReplacingMergeTree` current-state tables with FINAL deduplication + SCD-2 views (`v_customers_history`, `v_products_history`, `v_orders_history`, `v_order_items_history`) with `valid_from`/`valid_to`/`is_current` |
+| Dimensional data model | `dim_customers`, `dim_products`, `dim_date`, `dim_order_status`, `fact_orders`, `fact_order_items` |
+| Data available ASAP | CDC streaming pipeline - no batch ETL, changes propagate in seconds |
+| Business query endpoints | 4 pre-computed aggregate tables refreshed every 5s, served via FastAPI |
 
 ## Architecture
 
-The solution follows a modular architecture with these components:
+![Architecture Diagram](diagrams/architecture.png)
 
-1. **Extraction Layer**: Connects to the source database and extracts data incrementally
-2. **Transformation Layer**: Transforms the raw data into an analytical model
-3. **Loading Layer**: Loads the transformed data into the analytical database
-4. **CLI Application**: Provides a user interface to query and export results
+**Data flow through the layers:**
+
+1. **Source - PostgreSQL 15**: Operational database with `pg_cron` auto-generating orders, customers, and products every 1–2 minutes
+2. **CDC - Debezium**: Captures WAL changes via `pgoutput`. Single Message Transforms (SMTs) rename the source typo `quanity` to `quantity`, extract new record state, and cast types
+3. **Streaming - Redpanda**: Kafka-compatible broker receives 4 topics (`deel.operations.customers`, `products`, `orders`, `order_items`)
+4. **Analytics - ClickHouse**: Kafka Engine tables consume topics to MVs transform and write to Null engine staging tables to downstream MVs fan out each event to current-state and history tables to refreshable MVs pre-compute business aggregates
+5. **API - FastAPI**: Queries pre-computed aggregates with sub-millisecond response times
+
+## Tech Stack
+
+| Component | Technology | Purpose |
+|---|---|---|
+| Source DB | PostgreSQL 15 | Operational database + pg_cron data generation |
+| CDC | Debezium 3.0 | Change Data Capture from WAL |
+| Message Broker | Redpanda | Kafka-compatible streaming (lightweight, single binary) |
+| Analytics DWH | ClickHouse | Columnar OLAP database |
+| API | FastAPI | REST API for analytics queries |
+| Orchestration | Docker Compose | Single-command deployment of all services |
 
 ## Project Structure
 
 ```
-acme-analytics/
-├── docker/
+.
+├── api/
 │   ├── Dockerfile
-│   └── docker-compose.yml
-├── src/
-│   ├── main.py
-└── ├── README.md
-│   ├── config/
-│   │   ├── __init__.py
-│   │   └── settings.py
-│   │   └── logging.dev.ini
-│   ├── etl/
-│   │   ├── __init__.py
-│   │   └── extract.py
-│   │   └── transform.py
-│   │   └── load.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── schema.py
-│   ├── cli/
-│   │   ├── __init__.py
-│   │   └── commands.py
-│   └── utils/
-│       ├── __init__.py
-│       ├── database.py
-│       └── logger.py
+│   ├── main.py                        # FastAPI application (5 endpoints)
+│   └── requirements.txt
+├── clickhouse/
+│   ├── config.xml                     # ClickHouse server config
+│   ├── kafka.xml                      # Kafka engine connection settings
+│   ├── keeper_config.xml              # ClickHouse Keeper config
+│   ├── users.xml                      # User permissions
+│   └── sql/
+│       ├── 00_create_schemas.sql      # raw, mv, dwh schemas
+│       ├── 01_raw_kafka_tables.sql    # Kafka Engine consumer tables
+│       ├── 02_dwh_current_tables.sql  # ReplacingMergeTree current-state
+│       ├── 03_dwh_history_tables.sql  # MergeTree append-only history
+│       ├── 04_staging_tables.sql      # Null engine staging tables (transformation fan-out)
+│       ├── 05_dim_date.sql            # Date dimension (generated calendar)
+│       ├── 06_dim_order_status.sql    # Order status lookup dimension
+│       ├── 07_materialized_views.sql  # Raw to staging to current + history routing
+│       ├── 08_views_current.sql       # v_* convenience views (FINAL + soft-delete filter)
+│       ├── 09_aggregates.sql          # Refreshable MVs for business queries
+│       └── 10_scd2_views.sql          # SCD Type 2 views (valid_from/valid_to/is_current)
+├── connector-configs/
+│   ├── postgres-source.json           # Debezium connector configuration
+│   ├── create-connector.sh            # Register connector with Kafka Connect
+│   ├── check-status.sh               # Verify connector health
+│   └── update-connector.sh           # Update connector config
+├── db-scripts/
+│   └── initialize_db_ddl.sql          # PostgreSQL schema + pg_cron jobs
+├── docker/
+│   └── postgres-db/                   # Custom Postgres image (with pg_cron)
+├── diagrams/
+│   ├── architecture.png               # System architecture diagram
+│   └── database-diagram.png           # ClickHouse data model diagram
 ├── tests/
-│   ├── __init__.py
-│   ├── test_extraction.py
-│   ├── test_transformation.py
-│   └── test_loading.py
-├── requirements.txt
-├── .env
-├── Dockerfile
+│   ├── run-tests.sh                   # Test runner script
+│   ├── conftest.py                    # Shared fixtures
+│   ├── test_cdc_pipeline.py           # CDC pipeline integration tests (9 tests)
+│   ├── test_business_queries.py       # Business query tests (5 tests)
+│   └── test_api.py                    # API endpoint tests (5 tests)
 ├── docker-compose.yaml
-├── entrypoint.sh
+├── restart.sh                         # Full teardown + rebuild
+├── uninstall.sh                       # Remove all containers, volumes, images
 └── README.md
 ```
-## Installation and Setup
+
+## Data Model
+
+![Database Diagram](diagrams/database-diagram.png)
+
+The ClickHouse schema is organized in three layers:
+
+### `raw.*` - Kafka Engine Tables
+Ephemeral consumers that read from Redpanda topics. Data is consumed exactly once by the attached materialized views - no data is stored in these tables.
+
+### `staging.*` - Null Engine Staging Tables
+Intermediate layer using ClickHouse's Null engine (stores nothing, zero disk cost). Each Kafka table has one MV with transformation logic that writes to a staging table. The staging table then triggers two downstream MVs (`SELECT *`) — one to the current-state table and one to the history table. This ensures transformation logic exists in exactly one place (DRY), while data fans out to both write paths.
+
+Data flow: `raw.*_kafka` => `[MV: transforms]` => `staging.stg_* (Null)` => `[MV: SELECT *]` => `dwh.* + dwh.*_hist`
+
+### `dwh.*` - Dimensions
+
+**CDC-sourced dimensions** (`dim_customers`, `dim_products`):
+- `ReplacingMergeTree` engine with `cdc_source_ts_ms` as version column
+- Soft-delete support via `cdc_deleted` flag
+- Query with `FINAL` keyword for deduplicated results
+
+**Static dimensions**:
+- `dim_date` — pre-generated calendar dimension (2024–2028) with year, quarter, month, day_of_week, is_weekend
+- `dim_order_status` — order status lookup with `status_group` ('open'/'terminal') and `is_terminal` flag, used as single source of truth by aggregate queries
+
+**Facts** (`fact_orders`, `fact_order_items`):
+- `ReplacingMergeTree` with CDC deduplication, same pattern as dimensions
+
+**History** (`dim_customers_hist`, `dim_products_hist`, `fact_orders_hist`, `fact_order_items_hist`):
+- `MergeTree` engine (append-only)
+- Every CDC event recorded with `_inserted_at` timestamp
+- Full audit trail
+
+### CDC Metadata Columns
+
+All CDC-sourced tables include these audit columns:
+- `cdc_deleted` (UInt8) — soft-delete flag (1 = deleted in source)
+- `cdc_op` (String) — CDC operation type: `r` = snapshot read, `c` = create, `u` = update, `d` = delete. Used for audit trail analysis (e.g. count of updates vs creates per entity)
+- `cdc_source_ts_ms` (Int64) — source database transaction timestamp in milliseconds, used as version column for ReplacingMergeTree deduplication
+
+### `dwh.v_*` - Convenience Views
+
+**Current-state views** (`v_customers_current`, `v_orders_current`, etc.) apply `FINAL` and filter `cdc_deleted = 0` automatically.
+
+**SCD Type 2 views** (`v_customers_history`, `v_products_history`, `v_orders_history`, `v_order_items_history`) provide classic slowly-changing dimension columns computed from history tables:
+- `valid_from` — when this version became effective
+- `valid_to` — when it was superseded (`9999-12-31` for current)
+- `is_current` — convenience flag for the latest version
+
+### `dwh.agg_*` - Refreshable Materialized Views
+Pre-computed business aggregates, refreshed every **5 seconds**:
+- `agg_orders_by_date_status` - orders grouped by delivery date and status
+- `agg_top_delivery_dates` - delivery dates ranked by open order count
+- `agg_pending_items_by_product` - pending item quantities per product
+- `agg_top_customers_open` - customers ranked by open order count
+
+The API reads directly from these tables, resulting in sub-millisecond response times.
+
+## Getting Started
 
 ### Prerequisites
 
 - Docker and Docker Compose
-- Git
 
-### Setup Instructions
-
-1. Start the Docker containers:
+### Launch
 
 ```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Start the entire stack (all services including CDC connector register automatically)
 docker-compose up -d
+
+# Wait for all services to be healthy (~30-60 seconds)
+docker-compose ps
 ```
 
-This will start the following services:
-- PostgreSQL database
-- Application service (app)
-## Usage
+The `connect-init` container automatically registers the Debezium connector once Kafka Connect is healthy. Data starts flowing automatically - `pg_cron` generates new orders every minute and updates customers/products every 2 minutes.
 
-### Running the ETL Process
+### Verify It Works
 
-You have several options to run the ETL process:
-
-1. **One-time ETL run**:
 ```bash
-python -m src.cli run-etl
+# Check ClickHouse has data (may take 30s after connector registration)
+docker exec clickhouse clickhouse-client \
+  --query "SELECT count() FROM dwh.fact_orders FINAL WHERE cdc_deleted = 0 LIMIT 10;"
+
+# Check the API
+curl http://localhost:8000/health
+curl http://localhost:8000/analytics/orders
 ```
 
-2. **Continuous ETL** (with default polling interval):
+### Service Ports
+
+| Service | Port | URL |
+|---|---|---|
+| FastAPI | 8000 | http://localhost:8000 |
+| Redpanda Console | 8087 | http://localhost:8087 |
+| Kafka Connect REST | 8083 | http://localhost:8083 |
+| ClickHouse HTTP | 8123 | http://localhost:8123 |
+| ClickHouse Native | 9000 | - |
+| PostgreSQL | 5432 | - |
+
+### Web UIs
+
+| UI | URL |
+|---|---|
+| Redpanda Console — Topics | http://localhost:8087/topics/?showInternal=false |
+| Redpanda Console — Debezium Connector | http://localhost:8087/connect-clusters/connect/postgres-source |
+| Debezium Connect REST | http://localhost:8083/ |
+| Debezium Connector Status | http://localhost:8083/connectors/postgres-source |
+| ClickHouse SQL Playground | http://localhost:8123/play |
+| ClickHouse Dashboard | http://localhost:8123/dashboard |
+
+## API Endpoints
+
+| Method | Path | Parameters | Description | Business Question |
+|---|---|---|---|---|
+| GET | `/health` | - | Health check + ClickHouse connectivity | - |
+| GET | `/analytics/orders` | `status` (default: `open`) | Orders by delivery date and status | Open orders by DELIVERY_DATE and STATUS |
+| GET | `/analytics/orders/top` | `limit` (default: `3`) | Top N delivery dates by open order count | Top 3 delivery dates with most open orders |
+| GET | `/analytics/orders/product` | `status` (default: `pending`) | Pending items grouped by product | Pending items by PRODUCT_ID |
+| GET | `/analytics/orders/customers/` | `status` (default: `pending`), `limit` (default: `3`) | Top N customers by open order count | Top 3 customers with most pending orders |
+
+### Example Requests
+
 ```bash
-python -m src.cli run-continuous-etl
+# Open orders by delivery date and status
+curl "http://localhost:8000/analytics/orders?status=open"
+
+# Top 3 delivery dates with most open orders
+curl "http://localhost:8000/analytics/orders/top?limit=3"
+
+# Pending items by product (PENDING status only, default)
+curl "http://localhost:8000/analytics/orders/product"
+
+# All open items by product (all non-terminal statuses)
+curl "http://localhost:8000/analytics/orders/product?status=open"
+
+# Top 3 customers with most PENDING orders (default)
+curl "http://localhost:8000/analytics/orders/customers/?limit=3"
+
+# Top 3 customers with most open orders (all non-terminal statuses)
+curl "http://localhost:8000/analytics/orders/customers/?status=open&limit=3"
 ```
 
-3. **Continuous ETL** (with custom polling interval):
+## Testing
+
+The test suite contains **22 tests** across 3 modules, validating the full pipeline end-to-end.
+
 ```bash
-python -m src.cli run-continuous-etl --polling-interval 30
+cd tests
+./run-tests.sh
 ```
 
+| Module | Tests | What it validates |
+|---|---|---|
+| `test_cdc_pipeline.py` | 11 | Debezium connector status, Kafka topic existence, ClickHouse table structure, raw to dwh data flow, CDC event propagation, SCD2 validation |
+| `test_business_queries.py` | 6 | Aggregate table correctness, business query results, data consistency between current and history tables |
+| `test_api.py` | 5 | All API endpoints return correct structure, status codes, query parameters work as expected |
 
-### Generating Reports via CLI
+> Tests require a running stack (`docker-compose up -d`).
 
-To export all reports:
-```bash
-python -m src.cli export-reports --all
-```
+## Design Decisions
 
-Or export specific reports:
-```bash
-python -m src.cli export-reports --open-orders
-python -m src.cli export-reports --top-dates
-python -m src.cli export-reports --pending-items
-python -m src.cli export-reports --top-customers
-```
+**ClickHouse over PostgreSQL for analytics** - Columnar storage enables fast aggregations over millions of rows. ClickHouse's Kafka Engine provides native streaming ingestion without external consumers.
 
-The reports will be saved in the `output` directory as CSV files.
+**Redpanda over Apache Kafka** - Fully Kafka API-compatible but runs as a single binary with no JVM or ZooKeeper dependency. Significantly lower resource footprint for development and small deployments.
 
-### Available Reports
+**ReplacingMergeTree for CDC deduplication** - Debezium produces multiple events per row (creates, updates). ReplacingMergeTree with `cdc_source_ts_ms` as version keeps only the latest state when queried with `FINAL`, while soft-deletes are handled via the `cdc_deleted` flag.
 
-1. **Open Orders by Date and Status**: Number of open orders by DELIVERY_DATE and STATUS
-2. **Top Delivery Dates**: Top 3 delivery dates with more open orders
-3. **Pending Items by Product**: Number of open pending items by PRODUCT_ID
-4. **Top Customers**: Top 3 Customers with more pending orders
+**Null engine staging for DRY dual-write** - Each Kafka Engine table has one MV with transformation logic writing to a Null engine staging table. The staging table triggers two downstream MVs (`SELECT *`) — one to ReplacingMergeTree (current state) and one to MergeTree (append-only history). This eliminates duplicated transformation logic across the two write paths while satisfying both "current state" and "historical data" requirements.
 
-## Design Considerations
+**Refreshable MVs for aggregates** - Pre-computing the 4 business queries every 5 seconds means the API reads from small, pre-aggregated tables instead of scanning full fact tables. This gives sub-millisecond API response times regardless of data volume. The 4 aggregate MVs are chained via `DEPENDS ON` to refresh sequentially, ensuring consistent data across all API endpoints within each refresh cycle.
 
-### Data Model
+**Query-time SCD Type 2 via window functions** - The `v_*_history` views compute `valid_from`/`valid_to`/`is_current` at query time using `leadInFrame()` over append-only history tables, rather than storing these columns in `*_hist` tables directly. This is necessary because `valid_to` depends on the **next** CDC event for the same entity — which hasn't arrived yet at insert time. MergeTree is append-only with no row updates, so "go back and set `valid_to` on the previous row" is not possible. The alternative — a trigger MV that inserts a corrected copy of the previous row into a ReplacingMergeTree — would double write amplification, introduce merge-dependent correctness (requiring `FINAL`), and add race conditions on concurrent inserts. Window functions avoid all of this: each new event automatically adjusts `valid_to` of all prior versions at read time, with zero storage overhead and guaranteed correctness.
 
-The analytical database uses a denormalized schema optimized for the required business queries:
+**Debezium SMTs for in-flight transformation** - The source schema has a typo (`quanity` instead of `quantity`). Rather than propagating the typo or adding a transformation layer, a `ReplaceField` SMT renames the column at the connector level. `ExtractNewRecordState` flattens the Debezium envelope, and `Cast` normalizes types.
 
-- `analytical_orders`: Contains order information with customer details
-- `analytical_order_items`: Contains order item information with product details
+## Known Limitations
 
-### Incremental Processing
+**Security (by design — internal tool):**
+- Hardcoded DB credentials in docker-compose — stack is designed as an internal tool without external access
+- Debezium connector uses dedicated `cdc_user` with minimal permissions (SELECT + replication only)
+- ClickHouse default security, user without password
+- REST API service lacks authentication
 
-The solution extracts data incrementally based on update timestamps to minimize load on the source database.
+**Data pipeline:**
+- ClickHouse Kafka Engine — at-least-once delivery; on ClickHouse restart, duplicates are possible in history tables (current-state tables are deduplicated via `ReplacingMergeTree FINAL`)
+- `ReplacingMergeTree` + `FINAL` — correct but expensive at scale (`FINAL` triggers full-part scan); refreshable MVs for aggregates every 5 seconds partially mitigate this
+- `decimal.handling.mode: double` in Debezium — precision loss for monetary values; acceptable for demo, production should use `string` or Avro
+- Debezium without `heartbeat.interval.ms` — on idle tables the connector does not advance LSN, WAL may grow
+- No Dead Letter Queue or `errors.tolerance` — any transformation error stops the connector
+- `agg_pending_items_by_product` and `agg_top_customers_open` may show empty results — the `pg_cron` data generator inserts order items only when creating new orders, so open orders often have no associated items
+- Single partition on all Redpanda topics — no consumer parallelism
+- `dim_order_status` statuses are hardcoded — new statuses from the source system require manual addition to the dimension table
 
-### Error Handling
+**Infrastructure:**
+- All services are single-instance, no HA (one ClickHouse node, one keeper, one Redpanda broker)
+- No resource limits in docker-compose — one service can OOM its neighbors
+- No monitoring of PostgreSQL replication slot lag — if Debezium stops, WAL grows unbounded
+- `connect-init` container does not verify connector status after registration — if connector fails to start, the only symptom is missing data in ClickHouse
+- No retention policy for Redpanda topics
 
-Comprehensive error handling and logging are implemented throughout the application to ensure reliability.
+**API:**
+- No pagination or rate limiting
+- Single HTTP client to ClickHouse without connection pooling or reconnect logic
 
-### Configuration
-
-Configuration is managed through environment variables and the `.env` file, allowing easy customization.
-
-## ETL Pipeline
-## 1. Data Extraction (`src/etl/extract.py`)
-The extraction phase pulls data from the operational database using the `DataExtractor` class.
-
-### Key Components:
-1. **Order Extraction**
-```python
-def extract_orders(self, since: Optional[datetime] = None):
-```
-- Extracts orders updated since the last extraction time
-- Retrieves: order_id, customer_id, dates, status, and audit fields
-- Uses incremental loading to avoid processing unchanged data
-- Tracks last_extraction_time to ensure data consistency
-
-2. **Order Items Extraction**
-```python
-def extract_order_items(self, order_ids: List[int]):
-```
-- Pulls order items for extracted orders
-- Retrieves: order_item_id, order_id, product_id, quantity
-- Uses batch processing with IN clause for efficiency
-
-3. **Customer Data Extraction**
-```python
-def extract_customers(self, customer_ids: List[int]):
-```
-- Fetches customer details for relevant orders
-- Retrieves: customer_id, name, status, address
-- Optimized with batch retrieval
-
-## 2. Data Transformation (`src/etl/transform.py`)
-The transformation phase converts operational data into analytical models using the `DataTransformer` class.
-
-### Key Steps:
-1. **Data Preparation**
-```python
-# Create lookup dictionaries
-customer_dict = {c["customer_id"]: c for c in customers}
-product_dict = {p["product_id"]: p for p in products}
-
-# Group order items by order
-order_items_by_order = {}
-for item in order_items:
-    order_id = item["order_id"]
-    if order_id not in order_items_by_order:
-        order_items_by_order[order_id] = []
-    order_items_by_order[order_id].append(item)
-```
-
-2. **Order Transformation**
-- Calculates order totals:
-  ```python
-  total_items = sum(item["quanity"] for item in items)
-  total_amount = sum(item["quanity"] * product_dict[item["product_id"]]["unity_price"])
-  ```
-- Creates analytical order records with:
-  - Order details (ID, dates, status)
-  - Customer information
-  - Calculated totals
-  - Audit information
-
-3. **Order Items Transformation**
-- Transforms each order item with:
-  - Product details
-  - Order status
-  - Delivery information
-  - Audit trails
-
-## 3. Data Loading (`src/etl/load.py`)
-The loading phase uses the `DataLoader` class to populate the analytical database.
-
-### Schema Setup:
-```sql
-CREATE TABLE analytics.analytical_orders (
-    order_id INTEGER PRIMARY KEY,
-    customer_id INTEGER NOT NULL,
-    customer_name VARCHAR(100) NOT NULL,
-    order_date TIMESTAMP NOT NULL,
-    delivery_date TIMESTAMP,
-    status VARCHAR(20) NOT NULL,
-    total_items INTEGER NOT NULL,
-    total_amount NUMERIC(10, 2) NOT NULL,
-    -- Audit fields
-);
-
-CREATE TABLE analytics.analytical_order_items (
-    id INTEGER PRIMARY KEY,
-    order_id INTEGER NOT NULL,
-    product_id INTEGER NOT NULL,
-    product_name VARCHAR(100) NOT NULL,
-    quantity INTEGER NOT NULL,
-    price NUMERIC(10, 2) NOT NULL,
-    order_status VARCHAR(20) NOT NULL,
-    -- Additional fields
-);
-```
-### Optimization Features:
-1. **Indexes for Performance**
-```sql
-CREATE INDEX idx_orders_status ON analytics.analytical_orders (status);
-CREATE INDEX idx_orders_delivery_date ON analytics.analytical_orders (delivery_date);
-CREATE INDEX idx_items_product_id ON analytics.analytical_order_items (product_id);
-CREATE INDEX idx_items_order_status ON analytics.analytical_order_items (order_status);
-```
-
-2. **Upsert Operations**
-- Uses ON CONFLICT DO UPDATE for idempotent loads
-- Maintains data consistency during reruns
-
-## 4. Analytics Queries (`src/cli/commands.py`)
-The `AnalyticsQueries` class implements four key analytical views:
-
-### 1. Open Orders by Date/Status
-```sql
-SELECT 
-    delivery_date::date, 
-    status, 
-    COUNT(*) as order_count,
-    SUM(total_amount) as total_amount
-FROM 
-    analytics.analytical_orders
-WHERE 
-    status NOT IN ('COMPLETED', 'CANCELLED')
-GROUP BY 
-    delivery_date::date, status
-```
-- Tracks open orders distribution
-- Monitors order value by status
-
-### 2. Top Delivery Dates
-```sql
-SELECT 
-    delivery_date::date,
-    COUNT(*) as order_count,
-    COUNT(DISTINCT customer_id) as unique_customers
-FROM 
-    analytics.analytical_orders
-WHERE 
-    status NOT IN ('COMPLETED', 'CANCELLED')
-GROUP BY 
-    delivery_date::date
-ORDER BY 
-    order_count DESC
-LIMIT 3
-```
-- Identifies high-volume delivery dates
-- Helps in capacity planning
-
-### 3. Pending Items by Product
-```sql
-SELECT 
-    oi.product_id,
-    oi.product_name,
-    SUM(oi.quantity) as pending_quantity,
-    SUM(oi.quantity * oi.price) as total_pending_value
-FROM 
-    analytics.analytical_order_items oi
-WHERE 
-    oi.order_status = 'PENDING'
-GROUP BY 
-    oi.product_id, oi.product_name
-```
-- Tracks pending inventory needs
-- Monitors product-level backlog
-
-### 4. Top Customers with Pending Orders
-```sql
-SELECT 
-    o.customer_id,
-    o.customer_name,
-    COUNT(*) as pending_order_count,
-    SUM(o.total_amount) as total_pending_amount
-FROM 
-    analytics.analytical_orders o
-WHERE 
-    o.status = 'PENDING'
-GROUP BY 
-    o.customer_id, o.customer_name
-ORDER BY 
-    pending_order_count DESC
-LIMIT 3
-```
-- Identifies high-priority customers
-- Tracks pending order value
-
-
-
+**Schema evolution:**
+- No Schema Registry (Avro/Protobuf) — if PostgreSQL schema changes, ClickHouse tables will not update automatically
 
 ## Future Improvements
 
-1. **CDC Implementation**: Enhance the Change Data Capture implementation for real-time updates
-2. **Data Versioning**:
-   - Track changes to orders over time
-   - Maintain historical status changes
-   - Implement SCD (Slowly Changing Dimensions) for customer data
-3. **Data Quality and Validation**:
-   - Add data validation rules and constraints
-   - Implement data quality scoring
-   - Add data profiling and anomaly detection
-   - Create data quality dashboards
-   - Add unit tests for transformation logic
-4. **Performance Optimization**:
-   - Implement table partitioning by date for better query performance
-   - Add materialized views for frequently accessed analytics
-   - Implement query optimization and caching strategies
-   - Add connection pooling for better database performance
-5. **Partitioning**: Implement table partitioning for improved query performance on large datasets
-6. **API Layer**: Add a REST API to expose the analytical data
-7. **Visualization**: Integrate with a visualization tool like Grafana, Tableau, or through streamlit app
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Database Connection Errors**: Ensure the database services are running and the credentials are correct
-2. **Missing Data**: Check the ETL logs for errors during the extraction or loading process
-3. **Permission Issues**: Ensure the Docker volumes have the correct permissions
-
-### Logs
-
-Logs are organized by component and stored in the `logs` directory. You can access logs in several ways:
-1. **Application Logs**:
-```bash
-# View all application logs
-tail -f logs/*.log
-
-# View specific date's logs
-tail -f logs/YYYYMMDD_*.log
-```
-
-2. **Docker Container Logs**:
-```bash
-# View all container logs
-docker-compose logs
-
-# View specific service logs
-docker-compose logs app
-docker-compose logs transactions-db
-
-# Follow log output in real-time
-docker-compose logs -f app
-```
+- **Schema Registry (Avro)** for schema evolution and type safety
+- **Monitoring** — Grafana dashboards for pipeline lag, ClickHouse performance, API latency
+- **Backfill tooling** — re-snapshot specific tables without full pipeline restart
+- **ClickHouse clustering** — ReplicatedMergeTree + multiple keepers for HA
+- **API pagination, rate limiting, proper connection management**
