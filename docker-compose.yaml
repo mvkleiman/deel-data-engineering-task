@@ -36,7 +36,7 @@ services:
     tty: true
 
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.9
     container_name: redpanda
     restart: unless-stopped
     command:
@@ -101,7 +101,7 @@ services:
         condition: service_healthy
 
   console:
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v3.1.0
     container_name: console
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
@@ -171,7 +171,7 @@ services:
         condition: service_healthy
 
   connect-init:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.18.0
     container_name: connect-init
     volumes:
       - ./connector-configs/postgres-source.json:/config/postgres-source.json:ro
