@@ -78,22 +78,26 @@ def get_top_delivery_dates(limit: int = Query(3, ge=1, description="Number of to
 
 
 @app.get("/analytics/orders/product")
-def get_pending_items_by_product():
-    # Pending order items grouped by product_id
-    rows = _query('''
+def get_pending_items_by_product(
+    status: str = Query("pending", description="Filter: 'open' or 'pending'"),
+):
+    status_filter = "AND status = 'PENDING'" if status == "pending" else ""
+    rows = _query(f'''
         SELECT
             product_id,
             product_name,
-            pending_quantity
+            sum(pending_quantity) AS pending_quantity
         FROM dwh.agg_pending_items_by_product
+        WHERE 1=1 {status_filter}
+        GROUP BY product_id, product_name
         ORDER BY pending_quantity DESC
     ''')
-    return {"data": rows, "total": len(rows)}
+    return {"data": rows, "total": len(rows), "status": status}
 
 
 @app.get("/analytics/orders/customers/")
 def get_top_customers(
-    status: str = Query("open", description="Filter: 'open' or 'pending'"),
+    status: str = Query("pending", description="Filter: 'open' or 'pending'"),
     limit: int = Query(3, ge=1, description="Number of top customers"),
 ):
     status_filter = "AND status = 'PENDING'" if status == "pending" else ""
