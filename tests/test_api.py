@@ -58,4 +58,4 @@ def test_top_customers_pending(api_base_url):
     if data["data"]:
         row = data["data"][0]
         assert "customer_id" in row
-        assert "pending_order_count" in row
+        assert "order_count" in row

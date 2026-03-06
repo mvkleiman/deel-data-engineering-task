@@ -2,6 +2,7 @@ import os
 
 import clickhouse_connect
 from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="ACME Delivery Analytics API",
@@ -36,32 +37,28 @@ def health_check():
         get_client().query("SELECT 1")
         return {"status": "healthy", "clickhouse": "connected"}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "error": str(e)},
+        )
 
 
 @app.get("/analytics/orders")
 def get_open_orders(status: str = Query("open", description="Filter: 'open' or 'all'")):
-    # Open orders grouped by delivery date and status
-    if status == "open":
-        rows = _query('''
-            SELECT
-                delivery_date,
-                status,
-                order_count
-            FROM dwh.agg_open_orders_by_date_status
-            ORDER BY delivery_date, status
-        ''')
-    else:
-        rows = _query('''
-            SELECT
-                delivery_date,
-                status,
-                count() AS order_count
-            FROM dwh.fact_orders FINAL
-            WHERE cdc_deleted = 0 AND delivery_date IS NOT NULL
-            GROUP BY delivery_date, status
-            ORDER BY delivery_date, status
-        ''')
+    status_filter = (
+        "WHERE status IN (SELECT status FROM dwh.dim_order_status FINAL WHERE is_terminal = 0)"
+        if status == "open" else ""
+    )
+    rows = _query(f'''
+        SELECT
+            delivery_date,
+            status,
+            sum(order_count) AS order_count
+        FROM dwh.agg_orders_by_date_status
+        {status_filter}
+        GROUP BY delivery_date, status
+        ORDER BY delivery_date, status
+    ''')
     return {"data": rows, "total": len(rows)}
 
 
@@ -95,15 +92,20 @@ def get_pending_items_by_product():
 
 
 @app.get("/analytics/orders/customers/")
-def get_top_customers_pending(limit: int = Query(3, ge=1, description="Number of top customers")):
-    # Top N customers with the most pending orders
-    rows = _query('''
+def get_top_customers(
+    status: str = Query("open", description="Filter: 'open' or 'pending'"),
+    limit: int = Query(3, ge=1, description="Number of top customers"),
+):
+    status_filter = "AND status = 'PENDING'" if status == "pending" else ""
+    rows = _query(f'''
         SELECT
             customer_id,
             customer_name,
-            pending_order_count
-        FROM dwh.agg_top_customers_pending
-        ORDER BY pending_order_count DESC
-        LIMIT {limit: UInt32}
+            sum(order_count) AS order_count
+        FROM dwh.agg_top_customers_open
+        WHERE 1=1 {status_filter}
+        GROUP BY customer_id, customer_name
+        ORDER BY order_count DESC
+        LIMIT {{limit: UInt32}}
     ''', {"limit": limit})
-    return {"data": rows, "limit": limit}
+    return {"data": rows, "limit": limit, "status": status}

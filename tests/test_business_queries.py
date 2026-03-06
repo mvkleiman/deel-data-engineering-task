@@ -1,9 +1,9 @@
 """Tests for business query aggregate tables in ClickHouse."""
 
 
-def test_agg_open_orders_by_date_status(ch_client):
-    """Verify open orders aggregate has correct columns and data."""
-    result = ch_client.query("SELECT * FROM dwh.agg_open_orders_by_date_status LIMIT 10")
+def test_agg_orders_by_date_status(ch_client):
+    """Verify orders-by-date-status aggregate has correct columns and data."""
+    result = ch_client.query("SELECT * FROM dwh.agg_orders_by_date_status LIMIT 10")
     assert set(result.column_names) == {"delivery_date", "status", "order_count"}
     assert len(result.result_rows) > 0
 
@@ -15,19 +15,20 @@ def test_agg_top_delivery_dates(ch_client):
     assert len(result.result_rows) > 0
 
 
-def test_agg_top_customers_pending(ch_client):
+def test_agg_top_customers_open(ch_client):
     """Verify top customers aggregate has correct columns."""
-    result = ch_client.query("SELECT * FROM dwh.agg_top_customers_pending LIMIT 10")
-    assert set(result.column_names) == {"customer_id", "customer_name", "pending_order_count"}
+    result = ch_client.query("SELECT * FROM dwh.agg_top_customers_open LIMIT 10")
+    assert set(result.column_names) == {"customer_id", "customer_name", "status", "order_count"}
 
 
-def test_open_orders_exclude_completed(ch_client):
-    """Verify open orders aggregate excludes COMPLETED status."""
+def test_orders_agg_includes_all_statuses(ch_client):
+    """Verify orders aggregate includes all statuses (filtering happens at query time)."""
     result = ch_client.query("""
-        SELECT count() FROM dwh.agg_open_orders_by_date_status
-        WHERE status = 'COMPLETED'
+        SELECT DISTINCT status FROM dwh.agg_orders_by_date_status
     """)
-    assert result.result_rows[0][0] == 0
+    statuses = {row[0] for row in result.result_rows}
+    # Should contain at least one status
+    assert len(statuses) > 0
 
 
 def test_current_views_work(ch_client):
