@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS dwh.dim_customers_hist (
     cdc_source_ts_ms Int64 DEFAULT 0,
     _inserted_at     DateTime64(3) DEFAULT now64(3)
 ) ENGINE = MergeTree()
-ORDER BY (customer_id, cdc_source_ts_ms);
+PRIMARY KEY (customer_id)
+ORDER BY (customer_id, cdc_source_ts_ms, _inserted_at);
 
 CREATE TABLE IF NOT EXISTS dwh.dim_products_hist (
     product_id   Int64,
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS dwh.dim_products_hist (
     cdc_source_ts_ms Int64 DEFAULT 0,
     _inserted_at     DateTime64(3) DEFAULT now64(3)
 ) ENGINE = MergeTree()
-ORDER BY (product_id, cdc_source_ts_ms);
+PRIMARY KEY (product_id)
+ORDER BY (product_id, cdc_source_ts_ms, _inserted_at);
 
 CREATE TABLE IF NOT EXISTS dwh.fact_orders_hist (
     order_id      Int64,
@@ -49,7 +51,8 @@ CREATE TABLE IF NOT EXISTS dwh.fact_orders_hist (
     cdc_source_ts_ms Int64 DEFAULT 0,
     _inserted_at     DateTime64(3) DEFAULT now64(3)
 ) ENGINE = MergeTree()
-ORDER BY (order_id, cdc_source_ts_ms);
+PRIMARY KEY (order_id)
+ORDER BY (order_id, cdc_source_ts_ms, _inserted_at);
 
 CREATE TABLE IF NOT EXISTS dwh.fact_order_items_hist (
     order_item_id Int64,
@@ -65,4 +68,5 @@ CREATE TABLE IF NOT EXISTS dwh.fact_order_items_hist (
     cdc_source_ts_ms Int64 DEFAULT 0,
     _inserted_at     DateTime64(3) DEFAULT now64(3)
 ) ENGINE = MergeTree()
-ORDER BY (order_item_id, cdc_source_ts_ms);
+PRIMARY KEY (order_item_id)
+ORDER BY (order_item_id, cdc_source_ts_ms, _inserted_at);
