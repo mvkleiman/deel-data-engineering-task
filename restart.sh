@@ -7,4 +7,4 @@ docker compose up -d --build
 
 echo ""
 echo "Stack restarting. Services will be ready in ~30-60s."
-echo "Monitor with: docker compose logs -f"
+echo "Monitor with: docker compose logs -f --tail 100"
