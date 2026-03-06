@@ -31,8 +31,18 @@ def test_orders_agg_includes_all_statuses(ch_client):
     assert len(statuses) > 0
 
 
+def test_agg_pending_items_by_product(ch_client):
+    """Verify pending items by product aggregate has correct columns.
+
+    May return 0 rows: pg_cron inserts items only with new orders, so
+    open orders often have no items once their status is updated.
+    """
+    result = ch_client.query("SELECT * FROM dwh.agg_pending_items_by_product LIMIT 10")
+    assert set(result.column_names) == {"product_id", "product_name", "status", "pending_quantity"}
+
+
 def test_current_views_work(ch_client):
-    """Verify convenience views return data without errors."""
+    """Verify SCD-2 views return data without errors."""
     for view in ["v_customers_current", "v_products_current", "v_orders_current", "v_order_items_current"]:
         result = ch_client.query(f"SELECT count() FROM dwh.{view}")
         assert result.result_rows[0][0] >= 0

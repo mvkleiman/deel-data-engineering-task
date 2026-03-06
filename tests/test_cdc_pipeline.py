@@ -76,3 +76,38 @@ def test_quantity_column_renamed(ch_client):
     result = ch_client.query("SELECT quantity FROM dwh.fact_order_items FINAL LIMIT 1")
     assert len(result.column_names) == 1
     assert result.column_names[0] == "quantity"
+
+
+def test_scd2_has_current_row(ch_client):
+    """Every entity must have at least one is_current=1 row in SCD-2 views."""
+    views = {
+        "v_customers_history": "customer_id",
+        "v_products_history": "product_id",
+        "v_orders_history": "order_id",
+        "v_order_items_history": "order_item_id",
+    }
+    for view, entity_id in views.items():
+        result = ch_client.query(
+            f"SELECT {entity_id} FROM dwh.{view} "
+            f"GROUP BY {entity_id} "
+            f"HAVING sum(is_current) = 0"
+        )
+        assert len(result.result_rows) == 0, (
+            f"dwh.{view}: entities with no current row: {result.result_rows}"
+        )
+
+
+def test_scd2_valid_from_lte_valid_to(ch_client):
+    """No SCD-2 row should have valid_from > valid_to."""
+    views = [
+        "v_customers_history",
+        "v_products_history",
+        "v_orders_history",
+        "v_order_items_history",
+    ]
+    for view in views:
+        result = ch_client.query(
+            f"SELECT count() FROM dwh.{view} WHERE valid_from > valid_to"
+        )
+        count = result.result_rows[0][0]
+        assert count == 0, f"dwh.{view}: {count} rows with valid_from > valid_to"
